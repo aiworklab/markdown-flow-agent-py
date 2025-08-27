@@ -4,14 +4,12 @@ Markdown-Flow Core Business Logic
 Refactored MarkdownFlow class with built-in LLM processing capabilities and unified process interface.
 """
 
-import re
 from collections.abc import AsyncGenerator
 from copy import copy
 from typing import Any
 
 from .constants import (
     BLOCK_INDEX_OUT_OF_RANGE_ERROR,
-    BLOCK_SEPARATOR,
     BUTTONS_WITH_TEXT_VALIDATION_TEMPLATE,
     COMPILED_BRACKETS_CLEANUP_REGEX,
     COMPILED_INTERACTION_CONTENT_RECONSTRUCT_REGEX,
@@ -23,8 +21,6 @@ from .constants import (
     INPUT_EMPTY_ERROR,
     INTERACTION_ERROR_RENDER_INSTRUCTIONS,
     INTERACTION_PARSE_ERROR,
-    INTERACTION_PATTERN_NON_CAPTURING,
-    INTERACTION_PATTERN_SPLIT,
     INTERACTION_RENDER_INSTRUCTIONS,
     LLM_PROVIDER_REQUIRED_ERROR,
     OPTION_SELECTION_ERROR_TEMPLATE,
@@ -34,16 +30,13 @@ from .enums import BlockType
 from .exceptions import BlockIndexError
 from .llm import LLMProvider, LLMResult, ProcessMode
 from .models import Block, InteractionValidationConfig
+from .parsers import MarkdownFlowUnifiedParser
 from .utils import (
     InteractionParser,
     InteractionType,
     extract_interaction_question,
-    extract_preserved_content,
-    extract_variables_from_text,
-    is_preserved_content_block,
     parse_validation_response,
     process_output_instructions,
-    replace_variables_in_text,
 )
 
 
@@ -61,6 +54,7 @@ class MarkdownFlow:
     _interaction_error_prompt: str | None
     _blocks: list[Block] | None
     _interaction_configs: dict[int, InteractionValidationConfig]
+    _unified_parser: MarkdownFlowUnifiedParser | None
 
     def __init__(
         self,
@@ -87,6 +81,7 @@ class MarkdownFlow:
         self._interaction_error_prompt = interaction_error_prompt or DEFAULT_INTERACTION_ERROR_PROMPT
         self._blocks = None
         self._interaction_configs: dict[int, InteractionValidationConfig] = {}
+        self._unified_parser = None
 
     def set_llm_provider(self, provider: LLMProvider) -> None:
         """Set LLM provider."""
@@ -120,39 +115,16 @@ class MarkdownFlow:
         return len(self.get_all_blocks())
 
     def get_all_blocks(self) -> list[Block]:
-        """Parse document and get all blocks."""
+        """Parse document and get all blocks using new Markdown-style parser."""
         if self._blocks is not None:
             return self._blocks
 
-        content = self._document.strip()
-        segments = re.split(BLOCK_SEPARATOR, content)
-        final_blocks: list[Block] = []
-
-        for segment in segments:
-            # Use dedicated split pattern to avoid duplicate blocks from capturing groups
-            parts = re.split(INTERACTION_PATTERN_SPLIT, segment)
-
-            for part in parts:
-                part = part.strip()
-                if part:
-                    # Use non-capturing pattern for matching
-                    if re.match(INTERACTION_PATTERN_NON_CAPTURING, part):
-                        block = Block(
-                            content=part,
-                            block_type=BlockType.INTERACTION,
-                            index=len(final_blocks),
-                        )
-                        final_blocks.append(block)
-                    else:
-                        if is_preserved_content_block(part):  # type: ignore[unreachable]
-                            block_type = BlockType.PRESERVED_CONTENT
-                        else:
-                            block_type = BlockType.CONTENT
-
-                        block = Block(content=part, block_type=block_type, index=len(final_blocks))
-                        final_blocks.append(block)
-
-        self._blocks = final_blocks
+        # Use new unified parser
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        blocks, _ = self._unified_parser.parse_document(self._document)
+        self._blocks = blocks
         return self._blocks
 
     def get_block(self, index: int) -> Block:
@@ -163,8 +135,12 @@ class MarkdownFlow:
         return blocks[index]
 
     def extract_variables(self) -> list[str]:
-        """Extract all variable names from the document."""
-        return extract_variables_from_text(self._document)
+        """Extract all variable names from the document using new parser."""
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        _, variables = self._unified_parser.parse_document(self._document)
+        return variables
 
     def set_interaction_validation_config(self, block_index: int, config: InteractionValidationConfig) -> None:
         """Set validation config for specified interaction block."""
@@ -199,7 +175,11 @@ class MarkdownFlow:
         """
         # Process document_prompt variable replacement
         if self._document_prompt:
-            self._document_prompt = replace_variables_in_text(self._document_prompt, variables or {})
+            if self._unified_parser is None:
+                self._unified_parser = MarkdownFlowUnifiedParser()
+            self._document_prompt = self._unified_parser.variable_resolver.resolve_variables(
+                self._document_prompt, variables or {}
+            )
 
         block = self.get_block(block_index)
 
@@ -230,7 +210,7 @@ class MarkdownFlow:
         variables: dict[str, str] | None,
     ) -> LLMResult | AsyncGenerator[LLMResult, None]:
         """Process content block."""
-        # Build messages
+        # Build messages using new parser
         messages = self._build_content_messages(block_index, variables)
 
         if mode == ProcessMode.PROMPT_ONLY:
@@ -254,14 +234,14 @@ class MarkdownFlow:
             return stream_generator()
 
     async def _process_preserved_content(self, block_index: int, variables: dict[str, str] | None) -> LLMResult:
-        """Process preserved content block, output as-is without LLM call."""
+        """Process preserved content block using new parser, output as-is without LLM call."""
         block = self.get_block(block_index)
 
-        # Extract preserved content (remove === markers)
-        content = extract_preserved_content(block.content)
-
-        # Replace variables
-        content = replace_variables_in_text(content, variables or {})
+        # Use new unified parser to process preserved content with proper escape handling
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        content = self._unified_parser.process_block_content(block, variables or {})
 
         return LLMResult(content=content)
 
@@ -269,8 +249,14 @@ class MarkdownFlow:
         """Process interaction content rendering."""
         block = self.get_block(block_index)
 
-        # Apply variable replacement to interaction content
-        processed_content = replace_variables_in_text(block.content, variables or {})
+        # Apply variable replacement using new parser
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        # For interaction rendering, we need to handle variables in the interaction content
+        processed_content = self._unified_parser.variable_resolver.resolve_variables(
+            block.content, variables or {}
+        )
 
         # Create temporary block object to avoid modifying original data
         processed_block = copy(block)
@@ -357,8 +343,13 @@ class MarkdownFlow:
             error_msg = INPUT_EMPTY_ERROR
             return await self._render_error(error_msg, mode)
 
-        # Apply variable replacement to interaction content
-        processed_content = replace_variables_in_text(block.content, variables or {})
+        # Apply variable replacement using new parser for interaction processing
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        processed_content = self._unified_parser.variable_resolver.resolve_variables(
+            block.content, variables or {}
+        )
 
         # Parse interaction format using processed content
         parser = InteractionParser()
@@ -614,15 +605,18 @@ class MarkdownFlow:
         block_index: int,
         variables: dict[str, str] | None,
     ) -> list[dict[str, str]]:
-        """Build content block messages."""
+        """Build content block messages using new parser."""
         block = self.get_block(block_index)
-        block_content = block.content
+        
+        # Use new unified parser to process content with proper escape handling
+        if self._unified_parser is None:
+            self._unified_parser = MarkdownFlowUnifiedParser()
+        
+        # Process content with new parser (includes escape-aware variable replacement)
+        block_content = self._unified_parser.process_block_content(block, variables or {})
 
-        # Process output instructions
+        # Process output instructions (keep existing logic)
         block_content = process_output_instructions(block_content)
-
-        # Replace variables
-        block_content = replace_variables_in_text(block_content, variables or {})
 
         # Build message array
         messages = []
@@ -630,12 +624,6 @@ class MarkdownFlow:
         # Add document prompt
         if self._document_prompt:
             messages.append({"role": "system", "content": self._document_prompt})
-
-        # For most content blocks, historical conversation context is not needed
-        # because each document block is an independent instruction
-        # If future specific scenarios need context, logic can be added here
-        # if context:
-        #     messages.extend(context)
 
         # Add processed content as user message (as instruction to LLM)
         messages.append({"role": "user", "content": block_content})

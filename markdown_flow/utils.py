@@ -62,79 +62,6 @@ def extract_variables_from_text(text: str) -> list[str]:
     return sorted(list(variables))
 
 
-def is_preserved_content_block(content: str) -> bool:
-    """
-    Check if content is completely preserved content block.
-
-    Preserved blocks are entirely wrapped by === markers with no external content.
-    Supports inline (===content===) and multiline formats.
-
-    Args:
-        content: Content to check
-
-    Returns:
-        True if content is fully wrapped by === markers
-    """
-    content = content.strip()
-    if not content:
-        return False
-
-    lines = content.split("\n")
-
-    # Check if all non-empty lines are inline format
-    all_inline_format = True
-    has_any_content = False
-
-    for line in lines:
-        stripped_line = line.strip()
-        if stripped_line:  # Non-empty line
-            has_any_content = True
-            # Check if inline format
-            import re
-
-            match = re.match(r"^===(.+)===$", stripped_line)
-            if not match:
-                all_inline_format = False  # type: ignore[unreachable]
-                break
-            # Ensure inner content exists and contains no equals signs
-            inner_content = match.group(1).strip()
-            if not inner_content or "=" in inner_content:
-                all_inline_format = False  # type: ignore[unreachable]
-                break
-
-    # If all lines are inline format, return directly
-    if has_any_content and all_inline_format:
-        return True
-    # Check multiline format using state machine
-    state = "OUTSIDE"  # States: OUTSIDE, INSIDE
-    has_content_outside = False  # Has external content
-    has_preserve_blocks = False  # Has preserve blocks
-
-    for line in lines:
-        stripped_line = line.strip()
-
-        if stripped_line == TRIPLE_EQUALS_DELIMITER:
-            if state == "OUTSIDE":
-                # Enter preserve block
-                state = "INSIDE"
-                has_preserve_blocks = True
-            elif state == "INSIDE":
-                # Exit preserve block
-                state = "OUTSIDE"
-            # === lines don't count as external content
-        else:
-            # Non-=== lines
-            if stripped_line:  # Non-empty line
-                if state == "OUTSIDE":
-                    # External content found
-                    has_content_outside = True
-                # Internal content doesn't affect judgment
-
-    # Judgment conditions:
-    # 1. Must have preserve blocks
-    # 2. Cannot have external content
-    # 3. Final state must be OUTSIDE (all blocks closed)
-    return has_preserve_blocks and not has_content_outside and state == "OUTSIDE"
 
 
 def extract_interaction_question(content: str) -> str | None:
@@ -177,15 +104,17 @@ class InteractionType(Enum):
 class InteractionParser:
     """
     Three-layer interaction parser for ?[] format validation,
-    variable detection, and content parsing.
+    variable detection, and content parsing with escape support.
     """
 
     def __init__(self):
         """Initialize parser."""
+        from .parsers import MarkdownFlowInlineParser
+        self.inline_parser = MarkdownFlowInlineParser()
 
     def parse(self, content: str) -> dict[str, Any]:
         """
-        Main parsing method.
+        Main parsing method with escape handling.
 
         Args:
             content: Raw interaction block content
@@ -193,6 +122,115 @@ class InteractionParser:
         Returns:
             Standardized parsing result with type, variable, buttons, and question fields
         """
+        try:
+            # Check for obviously invalid formats before processing
+            # but allow Markdown links to be handled by specific detection logic
+            if self._is_obviously_invalid_format(content) and not self._is_markdown_link_format(content):
+                return {"error": f"Invalid interaction format: {content}"}
+            
+            # Extract inner content if input has ?[] wrapper
+            inner_content = self._extract_inner_content(content)
+            
+            # Use new inline parser for escape-aware parsing
+            result = self.inline_parser.parse_interaction_block(f"?[{inner_content}]")
+            
+            if 'error' in result:
+                # Check if this is a Markdown link format that should be rejected
+                if self._is_markdown_link_format(content):
+                    return {"error": "Markdown link format not supported as interaction"}
+                return self._create_error_result(result['error'])
+            elif 'type' in result:
+                # Convert type to enum for compatibility
+                type_mapping = {
+                    'text_only': InteractionType.TEXT_ONLY,
+                    'buttons_only': InteractionType.BUTTONS_ONLY,
+                    'buttons_with_text': InteractionType.BUTTONS_WITH_TEXT,
+                    'non_assignment_button': InteractionType.NON_ASSIGNMENT_BUTTON
+                }
+                
+                interaction_type = type_mapping.get(result['type'])
+                
+                return {
+                    "type": interaction_type,
+                    "variable": result.get('variable'),
+                    "buttons": result.get('buttons', []),
+                    "question": result.get('question')
+                }
+            else:
+                # Check if this is a Markdown link format that should be rejected
+                if self._is_markdown_link_format(content):
+                    return {"error": "Markdown link format not supported as interaction"}
+                return self._create_error_result("Parse failed")
+
+        except Exception:
+            # Check if this is a Markdown link format that should be rejected
+            if self._is_markdown_link_format(content):
+                return {"error": "Markdown link format not supported as interaction"}
+            # Fallback to old parsing method if token parser fails
+            return self._parse_legacy(content)
+    
+    def _extract_inner_content(self, content: str) -> str:
+        """Extract content from ?[...] format."""
+        content = content.strip()
+        
+        # Check if content starts with ?[ and ends with ]
+        if content.startswith('?[') and content.endswith(']') and len(content) > 2:
+            return content[2:-1]  # Remove ?[ and ]
+        
+        return content
+    
+    def _is_obviously_invalid_format(self, content: str) -> bool:
+        """
+        Check for obviously invalid interaction formats that should be rejected early.
+        
+        Args:
+            content: Raw input content
+            
+        Returns:
+            True if the format is obviously invalid
+        """
+        stripped = content.strip()
+        
+        # Empty string
+        if not stripped:
+            return True
+            
+        # Just punctuation marks that can't be valid interactions
+        # Note: '?[]' is valid (empty interaction), so we exclude it
+        if stripped in ['?', '?[', '?]', '[', ']']:
+            return True
+            
+        # Incomplete ?[content without closing bracket  
+        if stripped.startswith('?[') and not stripped.endswith(']'):
+            return True
+            
+        # Wrong bracket combinations
+        if stripped.startswith('?]') or stripped.endswith('[?'):
+            return True
+        
+        # Escaped interaction syntax - these should be handled at document level, not interaction level
+        if stripped.startswith('\\?[') and stripped.endswith(']'):
+            return True
+            
+        return False
+    
+    def _is_markdown_link_format(self, content: str) -> bool:
+        """
+        Check if content matches Markdown link format ?[text](url).
+        
+        Args:
+            content: Content to check
+            
+        Returns:
+            True if it's a Markdown link format
+        """
+        import re
+        # Check for ?[text](url) pattern
+        markdown_link_pattern = r'^\?\[[^\]]+\]\([^)]+\)$'
+        return bool(re.match(markdown_link_pattern, content.strip()))
+            
+    def _parse_legacy(self, content: str) -> dict[str, Any]:
+        """Legacy parsing method for fallback."""
         try:
             # Layer 1: Validate basic format
             inner_content = self._layer1_validate_format(content)
@@ -581,43 +619,6 @@ def process_output_instructions(content: str) -> str:
     return processed_content
 
 
-def extract_preserved_content(content: str) -> str:
-    """
-    Extract actual content from preserved content blocks, removing === markers.
-
-    Handles inline (===content===) and multiline formats.
-
-    Args:
-        content: Preserved content containing === markers
-
-    Returns:
-        Actual content with === markers removed
-    """
-    content = content.strip()
-    if not content:
-        return ""
-
-    lines = content.split("\n")
-    result_lines = []
-
-    for line in lines:
-        stripped_line = line.strip()
-
-        # Check inline format
-        match = re.match(r"^===(.+)===$", stripped_line)
-        if match:
-            # Inline format, extract middle content
-            inner_content = match.group(1).strip()
-            if inner_content and "=" not in inner_content:
-                result_lines.append(inner_content)
-        elif stripped_line == TRIPLE_EQUALS_DELIMITER:  # type: ignore[unreachable]
-            # Multiline format delimiter, skip
-            continue
-        else:
-            # Normal content line, keep
-            result_lines.append(line)
-
-    return "\n".join(result_lines)
 
 
 def parse_validation_response(llm_response: str, original_input: str, target_variable: str) -> dict[str, Any]:
@@ -669,7 +670,7 @@ def parse_validation_response(llm_response: str, original_input: str, target_var
 
 def replace_variables_in_text(text: str, variables: dict[str, str]) -> str:
     """
-    Replace variables in text, undefined or empty variables are auto-assigned "UNKNOWN".
+    Replace variables in text with escape handling, undefined or empty variables are auto-assigned "UNKNOWN".
 
     Args:
         text: Text containing variables
@@ -681,13 +682,32 @@ def replace_variables_in_text(text: str, variables: dict[str, str]) -> str:
     if not text or not isinstance(text, str):
         return text or ""
 
+    # Use new escape-aware variable parser
+    try:
+        from .parsers import MarkdownFlowVariableResolver, MarkdownFlowEscapeProcessor
+        processor = MarkdownFlowEscapeProcessor()
+        resolver = MarkdownFlowVariableResolver()
+        
+        # Process escapes first
+        escape_info = processor.process_inline_escapes(text)
+        
+        # Then resolve variables with escape awareness
+        return resolver.resolve_variables(escape_info.processed_text, variables or {}, escape_info)
+    except Exception:
+        # Fallback to legacy method
+        return _replace_variables_legacy(text, variables)
+
+
+def _replace_variables_legacy(text: str, variables: dict[str, str]) -> str:
+    """Legacy variable replacement without escape handling."""
+    if not text or not isinstance(text, str):
+        return text or ""
+
     # Check each variable for null or empty values, assign "UNKNOWN" if so
     if variables:
         for key, value in variables.items():
             if value is None or value == "":
                 variables[key] = VARIABLE_DEFAULT_VALUE
-
-    # re module already imported at file top
 
     # Initialize variables as empty dict (if None)
     if not variables:

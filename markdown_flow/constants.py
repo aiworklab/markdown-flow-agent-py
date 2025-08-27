@@ -12,10 +12,9 @@ COMPILED_PERCENT_VARIABLE_REGEX = re.compile(
     r"%\{\{([^}]+)\}\}"  # Match %{{variable}} format for preserved variables
 )
 
-# Interaction regex base patterns
-INTERACTION_PATTERN = r"(?<!\\)\?\[([^\]]*)\](?!\()"  # Base pattern with capturing group for content extraction, excludes escaped \?[]
-INTERACTION_PATTERN_NON_CAPTURING = r"(?<!\\)\?\[[^\]]*\](?!\()"  # Non-capturing version for block splitting, excludes escaped \?[]
-INTERACTION_PATTERN_SPLIT = r"((?<!\\)\?\[[^\]]*\](?!\())"  # Pattern for re.split() with outer capturing group, excludes escaped \?[]
+# Interaction regex base patterns (legacy patterns for fallback scenarios)
+# Note: Main escape handling is now done by the new parser architecture
+INTERACTION_PATTERN = r"(?<!\\)\?\[([^\]]*)\](?!\()"  # Base pattern with capturing group for content extraction
 
 # InteractionParser specific regex patterns
 COMPILED_INTERACTION_REGEX = re.compile(INTERACTION_PATTERN)  # Main interaction pattern matcher
@@ -33,10 +32,7 @@ COMPILED_BRACKETS_CLEANUP_REGEX = re.compile(r"[\[\]()]")
 COMPILED_VARIABLE_REFERENCE_CLEANUP_REGEX = re.compile(r"%\{\{.*?\}\}")
 COMPILED_WHITESPACE_CLEANUP_REGEX = re.compile(r"\s+")
 
-# Document parsing constants (using shared INTERACTION_PATTERN defined above)
-
-# Separators
-BLOCK_SEPARATOR = r"\n\s*---\s*\n"
+# Document parsing constants
 TRIPLE_EQUALS_DELIMITER = "==="
 
 # Output instruction markers
@@ -160,8 +156,7 @@ VARIABLE_DEFAULT_VALUE = "UNKNOWN"
 
 # Context generation constants
 CONTEXT_QUESTION_MARKER = "# 相关问题"
-CONTEXT_CONVERSATION_MARKER = "# 对话上下文"
 
 # Context generation templates
 CONTEXT_QUESTION_TEMPLATE = f"{CONTEXT_QUESTION_MARKER}\n{{question}}"
-CONTEXT_CONVERSATION_TEMPLATE = f"{CONTEXT_CONVERSATION_MARKER}\n{{content}}"
+CONTEXT_CONVERSATION_TEMPLATE = "# 对话上下文\n{content}"

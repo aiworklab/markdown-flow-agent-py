@@ -88,6 +88,12 @@ pytest -v
 
 # Run tests and stop on first failure
 pytest -x
+
+# Run comprehensive parsing tests (includes all interaction formats and edge cases)
+python tests/analysis.py
+
+# Run core functionality tests
+python tests/test_core.py
 ```
 
 ### Development Utilities
@@ -109,12 +115,18 @@ sphinx-build -b html docs/ docs/_build/html
 
 ### Core Components
 
-**MarkdownFlow (`core.py`)** - Main processing engine that parses MarkdownFlow documents into blocks and handles LLM interactions through a unified `process()` interface.
+**MarkdownFlow (`core.py`)** - Main processing engine that handles LLM interactions through a unified `process()` interface. Uses the new Markdown-style parser internally while maintaining full backward compatibility.
 
-**Three-Layer Parsing Architecture:**
-1. **Document Level**: Splits content using `---` separators and `?[]` interaction patterns
-2. **Block Level**: Categorizes blocks as CONTENT, INTERACTION, or PRESERVED_CONTENT
-3. **Interaction Level**: Parses `?[]` formats into TEXT_ONLY, BUTTONS_ONLY, BUTTONS_WITH_TEXT, or NON_ASSIGNMENT_BUTTON types
+**New Markdown-Style Two-Phase Parsing Architecture:**
+1. **Block-Level Parsing**: Identifies document structure (block separators, preserved content, interactions)
+2. **Inline-Level Parsing**: Processes elements within blocks (variables, interaction components, escape sequences)
+
+**Unified Parser (`parsers.py`)** - Clean, Markdown-inspired parsing system:
+- **MarkdownFlowBlockParser**: Document structure recognition using CommonMark principles
+- **MarkdownFlowInlineParser**: Block content processing with escape-aware parsing
+- **MarkdownFlowEscapeProcessor**: Precise escape handling with full and partial escape support
+- **MarkdownFlowVariableResolver**: Context-aware variable replacement with escape respect
+- **MarkdownFlowUnifiedParser**: Main coordinator combining all parsing components
 
 **LLM Integration (`llm.py`)** - Abstract provider interface supporting three processing modes:
 - `PROMPT_ONLY`: Generate prompts without LLM calls
@@ -125,12 +137,19 @@ sphinx-build -b html docs/ docs/_build/html
 - `{{variable}}`: Replaceable variables that get substituted
 - `%{{variable}}`: Preserved variables kept for LLM understanding
 
+**Enhanced Escape System** - Precise escape handling following Markdown conventions:
+- **Document Level Escapes**: `\---`, `\===`, `\?[]` - Prevent document structure interpretation
+- **Interaction Level Escapes**: `\%{{}}`, `\...`, `\|` - Prevent interaction syntax interpretation  
+- **Partial Escape Support**: `\%{{var}}` escapes only the `%` while `{{var}}` remains replaceable
+- **Context-Aware Processing**: Different escape rules for document, interaction, and variable contexts
+
 ### Key Processing Flow
 
-1. Parse document into blocks using `get_all_blocks()`
-2. Extract variables with `extract_variables()`
-3. Process blocks via unified `process(block_index, mode, variables, user_input)`
-4. Handle interaction validation through InteractionParser and validation templates
+1. **Document Parsing**: Parse document into blocks using Markdown-style block recognition
+2. **Variable Extraction**: Extract variables from all blocks with escape awareness
+3. **Block Processing**: Process blocks via unified `process(block_index, mode, variables, user_input)`
+4. **Escape-Aware Rendering**: Apply variable replacement while respecting escape sequences
+5. **LLM Integration**: Handle LLM calls with proper prompt construction and response parsing
 
 ### Block Types
 
@@ -144,6 +163,18 @@ sphinx-build -b html docs/ docs/_build/html
 - `?[%{{var}} A|B]` - Button selection only
 - `?[%{{var}} A|B|...question]` - Buttons with fallback text input
 - `?[Continue|Cancel]` - Display buttons without variable assignment
+
+### Escape Syntax
+
+**Document Level Escapes** (prevent document structure interpretation):
+- `\---` → `---` (literal text, not block separator)
+- `\===` → `===` (literal text, not preserve markers)  
+- `\?[content]` → `?[content]` (literal text, not interaction)
+
+**Interaction Level Escapes** (within `?[]` blocks):
+- `?[%{{var}}\...text]` → Button mode with literal "...text" (escape ellipsis)
+- `?[\%{{var}}...text]` → Non-variable text input (escape variable reference)
+- `?[%{{var}} A\|B|C]` → Buttons: "A|B" and "C" (escape pipe separator)
 
 ## Code Quality Guidelines
 
@@ -293,6 +324,9 @@ class TestMarkdownFlow:
 | LLM provider errors | Check API keys and network connectivity |
 | Variable replacement not working | Verify variable names match exactly (case-sensitive) |
 | Interaction parsing fails | Check `?[]` syntax is correctly formatted |
+| Escaped syntax not working | Ensure backslash escaping: `\?[]`, `\---`, `\===` for document level |
+| Interaction escapes not working | Use `\%{{}}`, `\...`, `\|` within interaction blocks |
+| Token parsing errors | Check for invalid escape combinations or malformed syntax |
 | Performance issues with large documents | Enable streaming mode and optimize batch sizes |
 
 ### Debug Commands
@@ -313,14 +347,29 @@ python -c "from markdown_flow import MarkdownFlow; mf = MarkdownFlow('test'); pr
 
 # Verify LLM integration (with mock)
 python -c "from markdown_flow.llm import ProcessMode; print('LLM classes available')"
+
+# Test new unified parser functionality
+python -c "from markdown_flow.parsers import MarkdownFlowUnifiedParser; p = MarkdownFlowUnifiedParser(); print('Unified parser working')"
+
+# Debug variable extraction
+python -c "from markdown_flow import extract_variables_from_text; vars = extract_variables_from_text('{{test}}'); print(f'Variables: {vars}')"
+
+# Test interaction parsing
+python -c "from markdown_flow.utils import InteractionParser; ip = InteractionParser(); print('Interaction parser available')"
 ```
 
 ## Important Implementation Notes
 
 - All regex patterns are pre-compiled in `constants.py` for performance
+- **New Markdown-style architecture**: Uses CommonMark-inspired two-phase parsing (block + inline)
+- **Unified parser system** (`parsers.py`): All parsing functionality consolidated into single module
+- **Context-aware escape processing**: Different rules apply at document, interaction, and variable levels
+- **Partial escape support**: `\%{{var}}` escapes only the `%` while keeping `{{var}}` replaceable
+- **Backward compatibility**: Public interface in `core.py` remains unchanged after architectural refactor
 - Validation uses smart templates that adapt based on context
 - Output instructions use `===content===` format converted to `[output]` format
 - Button values support display//value separation (e.g., "Yes//1|No//0")
 - Variables default to "UNKNOWN" when undefined or empty
-- The three-layer parsing architecture ensures robust handling of complex interaction formats
+- **Enhanced interaction parsing** with strict input validation to preserve system boundaries
 - LLM providers are abstracted to support different AI services seamlessly
+- **Performance optimized**: New parser eliminates redundant processing and improves escape handling efficiency
