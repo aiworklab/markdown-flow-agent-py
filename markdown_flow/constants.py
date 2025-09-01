@@ -13,9 +13,9 @@ COMPILED_PERCENT_VARIABLE_REGEX = re.compile(
 )
 
 # Interaction regex base patterns
-INTERACTION_PATTERN = r"\?\[([^\]]*)\](?!\()"  # Base pattern with capturing group for content extraction
-INTERACTION_PATTERN_NON_CAPTURING = r"\?\[[^\]]*\](?!\()"  # Non-capturing version for block splitting
-INTERACTION_PATTERN_SPLIT = r"(\?\[[^\]]*\](?!\())"  # Pattern for re.split() with outer capturing group
+INTERACTION_PATTERN = r"(?<!\\)\?\[([^\]]*)\](?!\()"  # Base pattern with capturing group for content extraction, excludes escaped \?[]
+INTERACTION_PATTERN_NON_CAPTURING = r"(?<!\\)\?\[[^\]]*\](?!\()"  # Non-capturing version for block splitting, excludes escaped \?[]
+INTERACTION_PATTERN_SPLIT = r"((?<!\\)\?\[[^\]]*\](?!\())"  # Pattern for re.split() with outer capturing group, excludes escaped \?[]
 
 # InteractionParser specific regex patterns
 COMPILED_INTERACTION_REGEX = re.compile(INTERACTION_PATTERN)  # Main interaction pattern matcher
