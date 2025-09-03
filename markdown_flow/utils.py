@@ -751,3 +751,33 @@ def replace_variables_in_text(
         result = re.sub(pattern, var_value, result)
 
     return result
+
+
+def validate_variable_name(variable_name: str) -> bool:
+    """
+    Validate if a variable name follows the naming convention.
+    
+    Variable names should contain only letters, numbers, and underscores,
+    and cannot start with a number.
+    
+    Args:
+        variable_name: Variable name to validate
+        
+    Returns:
+        True if variable name is valid, False otherwise
+        
+    Examples:
+        >>> validate_variable_name("user_name")
+        True
+        >>> validate_variable_name("123invalid")
+        False
+        >>> validate_variable_name("valid_name_123")
+        True
+    """
+    if not variable_name or not isinstance(variable_name, str):
+        return False
+    
+    # Check if variable name matches pattern: starts with letter or underscore,
+    # followed by letters, numbers, or underscores
+    pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
+    return bool(re.match(pattern, variable_name.strip()))

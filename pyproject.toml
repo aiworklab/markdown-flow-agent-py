@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "markdown-flow"
+name = "dev-markdown-flow"
 dynamic = ["version"]
 description = "An agent library designed to parse and process MarkdownFlow documents"
 readme = "README.md"
@@ -19,6 +19,15 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "commitizen>=3.0.0",
+    "pytest>=6.0",
+    "black",
+    "flake8",
+    "mypy"
+]
+
 [project.urls]
 "Homepage" = "https://github.com/ai-shifu/markdown-flow-agent-py"
 "Bug Tracker" = "https://github.com/ai-shifu/markdown-flow-agent-py/issues"
@@ -30,3 +39,14 @@ exclude = ["tests*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "markdown_flow.__version__"}
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$major.$minor.$patch"
+update_changelog_on_bump = true
+annotated_tag = true
+version_files = [
+    "markdown_flow/__init__.py:__version__"
+]
+bump_message = "bump: version $current_version → $new_version"

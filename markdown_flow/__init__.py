@@ -58,6 +58,7 @@ from .utils import (
     extract_variables_from_text,
     generate_smart_validation_template,
     replace_variables_in_text,
+    validate_variable_name,
 )
 
 # Public API
@@ -78,6 +79,7 @@ __all__ = [
     "extract_interaction_question",
     "extract_variables_from_text",
     "replace_variables_in_text",
+    "validate_variable_name",
 ]
 
 # Version information
