@@ -40,19 +40,18 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-      - name: Check if version bump is needed
-        id: check-version
+      - name: Bump version automatically
+        id: bump-version
         run: |
-          if ! git diff --quiet HEAD~1 HEAD -- markdown_flow/__init__.py; then
-            echo "version_changed=true" >> $GITHUB_OUTPUT
+          # Check if we need to bump version based on conventional commits
+          if cz bump --dry-run --changelog 2>/dev/null; then
+            echo "bump_needed=true" >> $GITHUB_OUTPUT
+            cz bump --changelog --yes
+            git push origin main --follow-tags
           else
-            echo "version_changed=false" >> $GITHUB_OUTPUT
+            echo "bump_needed=false" >> $GITHUB_OUTPUT
+            echo "No version bump needed based on commit messages"
           fi
-
-      - name: Bump version and create changelog
-        if: steps.check-version.outputs.version_changed == 'false'
-        run: |
-          cz bump --changelog --yes || echo "No version bump needed"
 
       - name: Get version
         id: version
@@ -70,25 +69,20 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create and push tag
-        if: steps.check-tag.outputs.exists == 'false'
-        run: |
-          git tag ${{ steps.version.outputs.tag }}
-          git push origin ${{ steps.version.outputs.tag }}
-
       - name: Build package
+        if: steps.bump-version.outputs.bump_needed == 'true' || steps.check-tag.outputs.exists == 'false'
         run: |
           python -m build
 
       - name: Publish to PyPI
-        if: steps.check-tag.outputs.exists == 'false'
+        if: steps.bump-version.outputs.bump_needed == 'true' || steps.check-tag.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
 
       - name: Create GitHub Release
-        if: steps.check-tag.outputs.exists == 'false'
+        if: steps.bump-version.outputs.bump_needed == 'true' || steps.check-tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
